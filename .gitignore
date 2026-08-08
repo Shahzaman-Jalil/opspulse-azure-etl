@@ -1,0 +1,4 @@
+watermark.json
+etl_log.log
+*.parquet
+*.csv
