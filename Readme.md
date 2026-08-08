@@ -1,107 +1,103 @@
-# 🚕 OpsPulse — Azure Batch ETL Pipeline
+# OpsPulse — Azure Batch ETL Pipeline
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![Azure](https://img.shields.io/badge/Azure-ADLS%20Gen2-0078D4?logo=microsoftazure&logoColor=white)
 ![Pandas](https://img.shields.io/badge/pandas-data%20processing-150458?logo=pandas&logoColor=white)
 ![Status](https://img.shields.io/badge/status-complete-brightgreen)
 
-A Python-based batch ETL pipeline that ingests NYC Yellow Taxi trip data, lands it in Azure Data Lake Storage Gen2, cleans it, and produces an analysis-ready processed layer — with incremental loading, logging, and error handling built in.
+A Python batch ETL pipeline that ingests NYC Yellow Taxi trip data, loads it into Azure Data Lake Storage Gen2, applies data quality transformations, and produces an analysis-ready processed dataset. Built with incremental loading, structured logging, and error handling.
 
----
+## Overview
 
-## 📌 Overview
+The pipeline follows a two-zone storage pattern common in production data lakes:
 
-This project simulates a real-world cloud data pipeline: raw data lands untouched in a **raw** zone for auditability, gets cleaned and validated, then lands in a **processed** zone ready for downstream analytics. Re-runs are safe — the pipeline only processes new data since the last run.
+- **Raw zone** — source data is landed as-is, preserving an unmodified copy for auditability and reprocessing.
+- **Processed zone** — cleaned, validated data ready for downstream consumption (reporting, analytics, further transformation).
 
-## 🏗️ Architecture
+Each run is incremental: a watermark tracks the last processed timestamp, so only new records are picked up on subsequent runs. This makes the pipeline safe to re-run without producing duplicate data.
+
+## Architecture
 
 ```
-┌─────────────────────┐
-│  Local Parquet File  │   (yellow_tripdata_2024-01.parquet)
-└──────────┬───────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│  Azure ADLS Gen2 — "raw"     │   original data, untouched
-└──────────┬───────────────────┘
-           │
-           ▼
-   ┌───────────────────┐
-   │   Transform Layer   │   clean nulls · drop invalid rows
-   └──────────┬─────────┘
-              │
-              ▼
-┌───────────────────────────────────┐
-│  Azure ADLS Gen2 — "processed"     │   analysis-ready data
-└─────────────────────────────────────┘
+Local parquet file
+        |
+        v
+Azure ADLS Gen2 (raw container)         -- unmodified source data
+        |
+        v
+Transform: null handling, row validation
+        |
+        v
+Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 ```
 
-## ⚙️ Tech Stack
+## Tech Stack
 
-| Category | Tools |
+- Python 3.13
+- pandas / pyarrow for data processing
+- Azure Data Lake Storage Gen2
+- `azure-storage-file-datalake` SDK
+- Python `logging` module for structured, persistent logs
+
+## Design Decisions
+
+**Incremental loading.** A watermark (`watermark.json`) stores the timestamp of the last successfully processed record. On each run, only rows newer than the watermark are extracted and loaded. The watermark is only updated when new data was actually processed — an earlier version of this pipeline updated it unconditionally, which produced an invalid timestamp on a run with zero new rows and silently broke incremental filtering on the following run. That's now guarded against explicitly.
+
+**Idempotency.** Re-running the pipeline against unchanged source data results in zero new rows processed. Uploads use `overwrite=True`, so re-running against the same file does not create duplicates in storage.
+
+**Logging over print statements.** All pipeline steps write to both stdout and a persistent `etl_log.log` file with timestamps and severity levels, so scheduled or unattended runs can be audited after the fact.
+
+**Fail loud, not silent.** Core pipeline logic runs inside a single `try/except` block. Failures are caught, logged with context, and the pipeline exits cleanly rather than crashing with an unhandled traceback.
+
+## Data Quality Rules Applied
+
+| Field | Rule |
 |---|---|
-| Language | Python 3.13 |
-| Data processing | pandas, pyarrow |
-| Cloud | Azure Data Lake Storage Gen2 |
-| SDK | `azure-storage-file-datalake` |
-| Observability | Python `logging` module |
+| `passenger_count` | Missing values defaulted to 1 |
+| `RatecodeID` | Missing values defaulted to 99 (unknown rate code) |
+| `store_and_fwd_flag` | Missing values defaulted to "N" |
+| `congestion_surcharge`, `Airport_fee` | Missing values defaulted to 0 |
+| `fare_amount` | Rows with values <= 0 dropped |
+| `trip_distance` | Rows with values <= 0 dropped |
 
-## ✨ Key Features
+## Assumptions
 
-### 🔄 Incremental Loading
-A watermark file (`watermark.json`) stores the timestamp of the last successfully processed record. Each run only picks up rows newer than that watermark — no reprocessing, no duplicate downstream data.
+- Source data arrives as a single parquet file per run, containing a `tpep_pickup_datetime` column used as the incremental watermark field.
+- The target storage account has Hierarchical Namespace enabled (ADLS Gen2). Containers are created automatically if they do not already exist.
+- Rows failing basic validity checks (non-positive fare or distance) are excluded from the processed layer rather than corrected, since there is no reliable way to infer the correct value.
 
-### ♻️ Idempotency
-Re-running the pipeline with no new source data results in **zero** new rows being processed — verified end-to-end. Uploads also use `overwrite=True`, so re-uploading a file replaces it rather than duplicating it.
+## Failure Scenarios
 
-### 📝 Logging
-Every step is logged to both the console and a persistent `etl_log.log` file, with timestamps and severity levels — so runs (including unattended/scheduled ones) can be audited after the fact.
+| Scenario | Observed behavior | Mitigation |
+|---|---|---|
+| Network interruption mid-upload | Connection or timeout error during the PATCH request | Extended `connection_timeout` (600s); failure is caught, logged, and does not corrupt partial state |
+| Invalid or expired connection string | Authentication error on client initialization | Caught by exception handler, logged with a clear cause before exit |
+| Missing or corrupted source file | File read fails before any network call is made | Caught by exception handler; no partial or invalid data reaches cloud storage |
+| Re-run with no new data | Watermark filter returns an empty dataframe | Upload steps are skipped entirely; watermark is left untouched rather than being overwritten with an invalid value |
 
-### 🛡️ Error Handling
-Core pipeline steps run inside a `try/except` block. Failures are caught and logged with a clear message instead of crashing silently.
-
-## 📂 Project Structure
+## Project Structure
 
 ```
 azure_batch_etl/
-├── opspulse_azure_upload.ipynb   # step-by-step pipeline (notebook)
-├── opspulse_full_etl.py          # consolidated pipeline script
-├── README.md
-├── .gitignore
+    opspulse_azure_upload.ipynb   step-by-step pipeline, notebook form
+    opspulse_full_etl.py          consolidated script version
+    README.md
+    .gitignore
 ```
 
-## 🧠 Assumptions
-
-- Source data arrives as a single parquet file per run, with `tpep_pickup_datetime` used as the incremental watermark column.
-- The Azure storage account has Hierarchical Namespace enabled (ADLS Gen2); `raw` and `processed` containers are created automatically if they don't exist.
-- Rows with `fare_amount <= 0` or `trip_distance <= 0` are treated as invalid and dropped during transformation.
-- Missing values in non-critical fields (`passenger_count`, `RatecodeID`, `store_and_fwd_flag`, `congestion_surcharge`, `Airport_fee`) are filled with sensible defaults rather than dropped.
-
-## ⚠️ Known Failure Scenarios & Handling
-
-| Scenario | Behavior | Handling |
-|---|---|---|
-| Network interruption during upload | Timeout/connection error | `connection_timeout=600` gives extended time; failure is caught and logged, not crashed |
-| Invalid or expired connection string | Authentication fails immediately | Caught by `try/except`, logged as an authentication error |
-| Missing or corrupted source file | File read fails before upload | Caught by the exception handler; no partial data reaches the cloud |
-
-## 🚀 How to Run
+## Running the Pipeline
 
 ```bash
 pip install pandas pyarrow azure-storage-file-datalake
 python opspulse_full_etl.py
 ```
 
-Before running, update:
-- `connection_string` — your Azure Storage connection string
-- `local_file_path` — path to your source parquet file
+Before running, set the following in the script:
+- `connection_string` — Azure Storage account connection string
+- `local_file_path` — path to the source parquet file
 
-## 📈 Future Improvements
+## Possible Extensions
 
-- Parameterize source file paths and container names via a config file
-- Add unit tests for the transform logic
-- Migrate orchestration to Azure Data Factory with this script as a Databricks/Function activity
-
----
-
-**Author:** Shah Zaman Jalil · [GitHub](https://github.com/Shahzaman-Jalil)
+- Move configuration (paths, container names, watermark column) into a config file rather than hardcoding
+- Add unit tests around the transformation and watermark logic
+- Orchestrate with Azure Data Factory, calling this script as a Databricks or Azure Function activity
