@@ -1,0 +1,8 @@
+services:
+  opspulse-etl:
+    build: .
+    container_name: opspulse-etl
+    environment:
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+    volumes:
+      - E:/Downloads:/data
