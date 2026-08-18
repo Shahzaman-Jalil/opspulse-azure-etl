@@ -3,9 +3,10 @@
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![Azure](https://img.shields.io/badge/Azure-ADLS%20Gen2-0078D4?logo=microsoftazure&logoColor=white)
 ![Pandas](https://img.shields.io/badge/pandas-data%20processing-150458?logo=pandas&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-containerized-2496ED?logo=docker&logoColor=white)
 ![Status](https://img.shields.io/badge/status-complete-brightgreen)
 
-A Python batch ETL pipeline that ingests NYC Yellow Taxi trip data, loads it into Azure Data Lake Storage Gen2, applies data quality transformations, and produces an analysis-ready processed dataset. Built with incremental loading, structured logging, and error handling.
+A Python batch ETL pipeline that ingests NYC Yellow Taxi trip data, loads it into Azure Data Lake Storage Gen2, applies data quality transformations, and produces an analysis-ready processed dataset. Built with incremental loading, structured logging, error handling, and Docker support for consistent, portable execution.
 
 ## Overview
 
@@ -31,6 +32,7 @@ Transform: null handling, row validation
 Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 ```
 
+
 ## Tech Stack
 
 - Python 3.13
@@ -38,6 +40,7 @@ Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 - Azure Data Lake Storage Gen2
 - `azure-storage-file-datalake` SDK
 - Python `logging` module for structured, persistent logs
+- Docker — containerized for consistent execution across environments
 
 ## Design Decisions
 
@@ -48,6 +51,8 @@ Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 **Logging over print statements.** All pipeline steps write to both stdout and a persistent `etl_log.log` file with timestamps and severity levels, so scheduled or unattended runs can be audited after the fact.
 
 **Fail loud, not silent.** Core pipeline logic runs inside a single `try/except` block. Failures are caught, logged with context, and the pipeline exits cleanly rather than crashing with an unhandled traceback.
+
+**Containerization.** The pipeline runs inside a Docker container built on `python:3.11-slim`, so it runs identically regardless of the host machine's Python version or installed packages. Sensitive credentials are passed at runtime via environment variables rather than being baked into the image.
 
 ## Data Quality Rules Applied
 
@@ -77,27 +82,46 @@ Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 
 ## Project Structure
 
-```
 azure_batch_etl/
-    opspulse_azure_upload.ipynb   step-by-step pipeline, notebook form
-    opspulse_full_etl.py          consolidated script version
-    README.md
-    .gitignore
-```
+opspulse_azure_upload.ipynb step-by-step pipeline, notebook form
+opspulse_azure_upload.py consolidated script version
+Dockerfile container build definition
+requirements.txt Python dependencies
+docker-compose.yaml container orchestration config
+README.md
+.gitignore
+
 
 ## Running the Pipeline
 
+### Option 1: Run locally with Python
+
 ```bash
-pip install pandas pyarrow azure-storage-file-datalake
-python opspulse_full_etl.py
+pip install -r requirements.txt
+python opspulse_azure_upload.py
 ```
 
-Before running, set the following in the script:
-- `connection_string` — Azure Storage account connection string
-- `local_file_path` — path to the source parquet file
+Before running, set the following environment variable:
+- `AZURE_STORAGE_CONNECTION_STRING` — Azure Storage account connection string
+
+### Option 2: Run with Docker
+
+Build the image:
+```bash
+docker build -t opspulse-etl .
+```
+
+Run the container, passing the connection string as an environment variable and mounting a local folder containing the source data:
+
+```bash
+docker run -e AZURE_STORAGE_CONNECTION_STRING=<your-connection-string> -v <local-data-path>:/data opspulse-etl
+```
+
+This keeps credentials out of the image itself — they're supplied only at runtime.
 
 ## Possible Extensions
 
 - Move configuration (paths, container names, watermark column) into a config file rather than hardcoding
 - Add unit tests around the transformation and watermark logic
 - Orchestrate with Azure Data Factory, calling this script as a Databricks or Azure Function activity
+- Push the Docker image to Azure Container Registry and deploy as an Azure Container Instance for scheduled runs
