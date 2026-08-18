@@ -82,15 +82,15 @@ Azure ADLS Gen2 (processed container)   -- clean, analysis-ready data
 
 ## Project Structure
 
-azure_batch_etl/
-opspulse_azure_upload.ipynb step-by-step pipeline, notebook form
-opspulse_azure_upload.py consolidated script version
-Dockerfile container build definition
-requirements.txt Python dependencies
-docker-compose.yaml container orchestration config
-README.md
-.gitignore
-
+```
+    opspulse_azure_upload.ipynb   step-by-step pipeline, notebook form
+    opspulse_azure_upload.py      consolidated script version
+    Dockerfile                    container build definition
+    requirements.txt              Python dependencies
+    docker-compose.yaml           container orchestration config
+    README.md
+    .gitignore
+```
 
 ## Running the Pipeline
 
